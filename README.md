@@ -18,3 +18,4 @@ Characteristics
 10. Programmable Communication Protocols: Supports MQTT, HTTP, Firebase, or TCP/UDP (Default: MQTT).
 
 Author: Adib Fridiansya
+fridiansya@gmail.com
