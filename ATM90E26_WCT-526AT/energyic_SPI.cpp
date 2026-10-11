@@ -29,8 +29,8 @@
 ATM90E26_SPI::ATM90E26_SPI(int pin) {
   _cs = pin;
 
-  metering[_plconsth] = 0x002D;
-  metering[_plconstl] = 0xFEAE;
+  metering[_plconsth] = 0x0050; // High byte dari 0x00500000
+  metering[_plconstl] = 0x0000; // Low byte dari 0x00500000
   metering[_lgain] = 0x1D39;
   metering[_lphi] = Lphi_Default;
   metering[_ngain] = Ngain_Default;
@@ -39,11 +39,12 @@ ATM90E26_SPI::ATM90E26_SPI(int pin) {
   metering[_pnolth] = PNolTh_Default;
   metering[_qstartth] = QStartTh_Default;
   metering[_qnolth] = QNolTh_Default;
-  metering[_mmode] = MMode_Default;
+  // metering[_mmode] = MMode_Default;
+  metering[_mmode] = 0x1422; // Secara paksa menetapkan Gain 1x untuk arus L-Line
   _crc1 = CalcCheckSum(1);
 
-  measurement[_ugain] = 0x65DB;
-  measurement[_igain] = 0x46D2;
+  measurement[_ugain] = 0x6530;
+  measurement[_igain] = 0x3DC3;
   measurement[_igainn] = IgainN_Default;
   measurement[_uoffset] = Uoffset_Default;
   measurement[_ioffestl] = IoffsetL_Default;
