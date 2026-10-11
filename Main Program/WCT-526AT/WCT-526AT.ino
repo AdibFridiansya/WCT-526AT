@@ -20,7 +20,13 @@
 #include <esp_arduino_version.h>
 #include <math.h>        
 
-#define WDT_TIMEOUT 60 
+#define WDT_TIMEOUT 60 // Watchdog Timeout 60 detik
+
+const unsigned short CAL_PLCONST_H = 0x0050; // High Byte PL_Constant (5.242.880)
+const unsigned short CAL_PLCONST_L = 0x0000; // Low Byte PL_Constant
+const unsigned short CAL_UGAIN     = 0x6530; // Voltage Calibrate (Decimal: 25904)
+const unsigned short CAL_IGAIN     = 0x3DC3; // Current Calibrate (Decimal: 15811)
+const unsigned short CAL_MMODE     = 0x1422; // MMode Gain 1x L-Line & N-Line
 
 /* Network and MQTT credentials */
 const char apn[]      = "internet"; 
@@ -49,6 +55,7 @@ Preferences wctPrefs;
 
 bool isDataSaved = false; 
 
+// Variabel pulsa wajib dibuat volatile dan dihitung murni di dalam ISR
 volatile unsigned long pulseCount = 0; 
 volatile unsigned long lastPulseTime = 0;
 volatile unsigned long pulseInterval = 0;
@@ -77,7 +84,7 @@ void IRAM_ATTR onPulseCF1() {
   pulseCount++; 
 }
 
-// GPRS & MQTT NON-BLOCKING
+// --- FUNGSI GPRS & MQTT NON-BLOCKING ---
 void connectGPRS() {
   esp_task_wdt_reset(); 
 
@@ -89,7 +96,7 @@ void connectGPRS() {
   Serial.print("\n[GPRS] Waiting for network signal...");
   digitalWrite(ledGreen, LOW); 
   
-  if (!modem.waitForNetwork(20000)) {
+  if (!modem.waitForNetwork(20000)) { 
     Serial.println(" NO SIGNAL / REGISTRATION FAILED");
     return;
   }
@@ -105,7 +112,7 @@ void connectGPRS() {
 }
 
 void reconnectMqttNonBlocking() {
-  if (millis() - lastMqttAttempt > 5000) {
+  if (millis() - lastMqttAttempt > 5000) { 
     lastMqttAttempt = millis();
     esp_task_wdt_reset(); 
     Serial.print("Attempting MQTT Connection...");
@@ -129,7 +136,9 @@ void setup() {
   SerialAT.begin(9600, SERIAL_8N1, MODEM_RX, MODEM_TX);
   delay(1500); 
 
-  Serial.println("\n[ WCT-526AT SYSTEM BOOTING ]");
+  Serial.println("\n==============================================");
+  Serial.println("         WCT-526AT SYSTEM BOOTING             ");
+  Serial.println("==============================================");
   
   // Inisialisasi WDT dengan reconfigure untuk kompatibilitas Core v3.x
 #if defined(ESP_ARDUINO_VERSION_VAL) && ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
@@ -152,11 +161,35 @@ void setup() {
   pinMode(CF1_PIN, INPUT);
   attachInterrupt(digitalPinToInterrupt(CF1_PIN), onPulseCF1, RISING);
 
+  // --- INISIALISASI & KALIBRASI ATM90E26 ---
   SPI.begin(); 
   eic.InitEnergyIC(); 
-  delay(500); 
 
-  // Pemulihan slot A/B (Redundancy Recovery)
+  // Terapkan parameter kalibrasi kustom dari program utama
+  eic.SetUGain(CAL_UGAIN);
+  eic.SetIGain(CAL_IGAIN);
+  eic.CalibrateEnergyIC(); // Hitung ulang Checksum & kirim ulang ke registri ATM90E26
+  delay(200);
+
+  // Cetak rincian parameter kalibrasi ke Serial Monitor
+  uint32_t pl_const = ((uint32_t)CAL_PLCONST_H << 16) | CAL_PLCONST_L;
+  Serial.println("\n--- PARAMETER KALIBRASI METROLOGI AKTIF ---");
+  Serial.print("PL_Constant : 0x"); Serial.print(pl_const, HEX);
+  Serial.print(" (Desimal: "); Serial.print(pl_const); Serial.println(")");
+  
+  Serial.print("Ugain       : 0x"); Serial.print(CAL_UGAIN, HEX);
+  Serial.print(" (Desimal: "); Serial.print(CAL_UGAIN); Serial.println(")");
+  
+  Serial.print("Igain       : 0x"); Serial.print(CAL_IGAIN, HEX);
+  Serial.print(" (Desimal: "); Serial.print(CAL_IGAIN); Serial.println(")");
+  
+  Serial.print("MMode       : 0x"); Serial.println(CAL_MMODE, HEX);
+  
+  Serial.print("Checksum 1  : 0x"); Serial.println(eic.CommEnergyIC(1, CSOne, 0x0000), HEX);
+  Serial.print("Checksum 2  : 0x"); Serial.println(eic.CommEnergyIC(1, CSTwo, 0x0000), HEX);
+  Serial.println("-------------------------------------------");
+
+  // Pemulihan slot A/B (Redundancy Recovery NVS)
   wctPrefs.begin("kwh_meter", false); 
   
   double kwh_spi_A = wctPrefs.getDouble("kwh_spi_A", 0.0000);
@@ -164,25 +197,23 @@ void setup() {
   double kwh_cf_A  = wctPrefs.getDouble("kwh_cf_A", 0.0000);
   double kwh_cf_B  = wctPrefs.getDouble("kwh_cf_B", 0.0000);
 
-  // Ambil nilai tertinggi yang valid
   total_KWH_SPI = (isnan(kwh_spi_A) || isnan(kwh_spi_B)) ? 0.0 : max(kwh_spi_A, kwh_spi_B);
   total_KWH_CF  = (isnan(kwh_cf_A) || isnan(kwh_cf_B))   ? 0.0 : max(kwh_cf_A, kwh_cf_B);
   
-  // Tentukan slot berikutnya yang akan ditimpa
   writeToSlotA = (total_KWH_SPI == kwh_spi_B);
 
-  Serial.println("--- NVS INTEGRITY CHECK SUCCESSFUL ---");
+  Serial.println("\n--- STATUS NVS MEMORY ---");
   Serial.print("Restored kWh (SPI) : "); Serial.println(total_KWH_SPI, 4);
   Serial.print("Restored kWh (CF)  : "); Serial.println(total_KWH_CF, 4);
+  Serial.println("-------------------------------------------");
 
   // Inisialisasi Perangkat Keras SIM800L
-  Serial.println("Initializing Modem Hardware...");
+  Serial.println("\nInitializing Modem Hardware...");
   pinMode(MODEM_RST, OUTPUT);
   digitalWrite(MODEM_RST, HIGH); delay(200);
   digitalWrite(MODEM_RST, LOW);  delay(1000);
   digitalWrite(MODEM_RST, HIGH); delay(3000);
 
-  // Handshake AT Command dengan SIM800L
   Serial.print("Connecting to SIM800L AT Interface...");
   if (!modem.restart()) {
     Serial.println(" FAILED! (Cek Baudrate / Kabel RX-TX / Catu Daya SIM800L)");
@@ -211,7 +242,7 @@ void loop() {
   // --- PEMROSESAN PULSA CF1 DARI ISR ---
   noInterrupts();
   unsigned long currentPulses = pulseCount;
-  pulseCount = 0; // Reset counter setelah diambil
+  pulseCount = 0; 
   unsigned long interval_us = pulseInterval;
   interrupts();
 
@@ -302,7 +333,7 @@ void loop() {
       Serial.print(" | CF kWh: "); Serial.println(total_KWH_CF, 4);
 
       if (client.connected()) {
-        String device_id = "WCT-526AT: 001"; // DEVICE NAME -----------------------------------------------------------------------------------
+        String device_id = "WCT-526AT: 001";
         String payload = "{";
         payload += "\"device_id\":\"" + device_id + "\",";
         payload += "\"voltage\":" + String(avgVoltage, 2) + ",";
